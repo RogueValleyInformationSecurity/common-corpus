@@ -8,27 +8,51 @@ Common Corpus is a tool for building coverage-minimized corpus data sets for fuz
 
 ## Running the Tool
 
+The script uses `uv run --script` with inline dependencies (PEP 723), so no separate install step is needed:
+
 ```bash
-# Install dependencies
-pip3 install warcio boto3
+# Basic usage
+./common_corpus.py index.csv \
+    --target-cmdline './pdfium_test --ppm {}' \
+    --target-binary pdfium_test \
+    --file-format pdf
 
-# Run with an index CSV file
-python3 common_corpus.py <index_csv>
+# With all options
+./common_corpus.py index.csv \
+    --target-cmdline './pdfium_test --ppm {}' \
+    --target-binary pdfium_test \
+    --file-format pdf \
+    --cleanup-glob '*.ppm' \
+    --threads 8 \
+    --output-dir corpus \
+    --verbose \
+    --resume state.dat
 
-# Resume from saved state
-python3 common_corpus.py <index_csv> state.dat
+# Validate configuration without processing
+./common_corpus.py index.csv \
+    --target-cmdline './pdfium_test --ppm {}' \
+    --target-binary pdfium_test \
+    --file-format pdf \
+    --dry-run
 ```
 
-## Configuration
+## CLI Arguments
 
-Before running, configure these variables at the top of `common_corpus.py`:
-
-- `ACCESS_KEY` / `SECRET_KEY`: AWS credentials for S3 access to Common Crawl
-- `TARGET_CMDLINE`: Command line for the sancov-enabled binary (use `%s` as placeholder for test file)
-- `TARGET_BINARY`: Name of the sancov-enabled binary (for locating .sancov files)
-- `FILE_FORMAT`: File extension for corpus files
-- `CLEANUP_GLOB`: Glob pattern for files to clean up after each run (empty string to skip)
-- `NTHREADS`: Number of worker threads (default: 16)
+| Argument | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `index_csv` | Yes | - | CSV file from AWS Athena query |
+| `--target-cmdline` | Yes | - | Command line with `{}` as testcase placeholder |
+| `--target-binary` | Yes | - | Binary name for locating .sancov files |
+| `--file-format` | Yes | - | File extension (pdf, png, etc.) |
+| `--aws-access-key` | No | `$AWS_ACCESS_KEY_ID` | AWS credentials |
+| `--aws-secret-key` | No | `$AWS_SECRET_ACCESS_KEY` | AWS credentials |
+| `--cleanup-glob` | No | None | Glob pattern for cleanup |
+| `--threads` | No | 16 | Worker thread count |
+| `--output-dir` | No | `out` | Corpus output directory |
+| `--resume` | No | None | Resume from state file |
+| `--state-file` | No | `state.dat` | State file path |
+| `--verbose` | No | False | Show progress stats |
+| `--dry-run` | No | False | Validate config only |
 
 ## Prerequisites
 
@@ -63,16 +87,16 @@ clang -fsanitize=address -fsanitize-coverage=trace-pc-guard -o target target.c
 
 Single-file Python script with multi-threaded design:
 
-- **Main thread**: Loads index CSV, spawns worker threads, handles graceful shutdown on Ctrl+C
+- **Main thread**: Parses CLI args, loads index CSV, spawns worker threads, handles graceful shutdown via SIGINT
 - **Worker threads**: Each thread independently fetches WARC records from S3 (using `warcio`), runs the target binary with `ASAN_OPTIONS=coverage=1`, analyzes resulting `.sancov` files
-- **Shared state**: Global `coverage` set tracks all seen edges; `id_lock` mutex protects corpus ID assignment
+- **Thread safety**: Explicit locks protect shared state (`index`, `coverage`, `tested_count`, `corpus_id`)
 
-The tool uses SanitizerCoverage's trace-pc-guard mode. Each test file produces a `.sancov` file containing 8-byte edge addresses. Files triggering new edges are saved to `out/`.
+The tool uses SanitizerCoverage's trace-pc-guard mode. Each test file produces a `.sancov` file containing 8-byte edge addresses. Files triggering new edges are saved to the output directory.
 
 ## Output
 
-- Corpus files: `out/corpus<N>.<format>`
-- Coverage data: `out/corpus<N>.<format>.sancov`
+- Corpus files: `<output-dir>/corpus<N>.<format>`
+- Coverage data: `<output-dir>/corpus<N>.<format>.sancov`
 - State file: `state.dat` (JSON with index offset, corpus ID, tested count, coverage set)
 
 Progress indicators: `+` = new coverage added, `.` = no new coverage, `|N-S|` = S3 retry (thread N, sleep S seconds)
