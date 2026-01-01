@@ -33,19 +33,7 @@ Query the raw parquet files directly (slower, but no preprocessing):
     --search-extension qoi --output-dir corpus/
 ```
 
-### Option 3: AWS Athena
-
-No local storage needed, pay per query (~$0.25-1.00):
-
-```bash
-export AWS_ACCESS_KEY_ID=...
-export AWS_SECRET_ACCESS_KEY=...
-
-./cc_download.py --athena --mime image/png --output-extension png \
-    --athena-output s3://my-bucket/athena/ --output-dir corpus/
-```
-
-### Option 4: Pre-generated CSV
+### Option 3: Pre-generated CSV
 
 ```bash
 ./cc_download.py --csv index.csv --output-extension pdf --output-dir corpus/
@@ -54,7 +42,7 @@ export AWS_SECRET_ACCESS_KEY=...
 ## Usage
 
 ```
-cc_download.py (--duckdb FILE | --local-index DIR | --athena | --csv FILE)
+cc_download.py (--duckdb FILE | --local-index DIR | --csv FILE)
                (--mime TYPE | --search-extension EXT) [options]
 ```
 
@@ -64,7 +52,6 @@ cc_download.py (--duckdb FILE | --local-index DIR | --athena | --csv FILE)
 |----------|-------------|
 | `--duckdb FILE` | Preprocessed DuckDB index (fastest, recommended) |
 | `--local-index DIR` | Raw parquet files (~250GB per crawl) |
-| `--athena` | Query AWS Athena (requires `--athena-output`) |
 | `--csv FILE` | Pre-generated CSV file |
 
 ### Query Filters
@@ -92,7 +79,6 @@ cc_download.py (--duckdb FILE | --local-index DIR | --athena | --csv FILE)
 |---------|-------|-------------|------|
 | DuckDB (preprocessed) | ~250GB download + 10min preprocess | <1 second | Free |
 | Local parquet | ~250GB download | 1-5 minutes | Free |
-| AWS Athena | S3 bucket | 10-60 seconds | ~$0.25-1/query |
 | CSV | Generate manually | Instant | Free |
 
 ## Workflow Example

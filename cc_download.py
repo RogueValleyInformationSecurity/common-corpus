@@ -11,8 +11,8 @@ cc_download - Download files from Common Crawl for fuzzing corpus generation.
 
 Downloads files matching a MIME type or extension from Common Crawl's web archive.
 Supports three index sources:
-- Local parquet files (fastest, requires ~250GB per crawl)
-- AWS Athena (no setup, pay per query)
+- Preprocessed DuckDB index (fastest, ~4GB)
+- Raw parquet files (~250GB per crawl)
 - Pre-generated CSV file
 """
 
@@ -56,125 +56,6 @@ def format_bytes(size: int) -> str:
             return f"{size:.1f} {unit}"
         size /= 1024
     return f"{size:.1f} PB"
-
-
-# --- Athena Backend ---
-
-
-def run_athena_query(
-    athena_client,
-    query: str,
-    database: str,
-    output_location: str,
-) -> str:
-    """Run an Athena query and return the query execution ID."""
-    response = athena_client.start_query_execution(
-        QueryString=query,
-        QueryExecutionContext={"Database": database},
-        ResultConfiguration={"OutputLocation": output_location},
-    )
-    return response["QueryExecutionId"]
-
-
-def wait_for_query(athena_client, query_id: str, timeout: int = 300) -> str:
-    """Wait for Athena query to complete. Returns status."""
-    start = time.time()
-    while time.time() - start < timeout:
-        response = athena_client.get_query_execution(QueryExecutionId=query_id)
-        state = response["QueryExecution"]["Status"]["State"]
-
-        if state == "SUCCEEDED":
-            return state
-        elif state in ("FAILED", "CANCELLED"):
-            reason = response["QueryExecution"]["Status"].get(
-                "StateChangeReason", "Unknown"
-            )
-            raise RuntimeError(f"Query {state}: {reason}")
-
-        time.sleep(2)
-
-    raise RuntimeError(f"Query timed out after {timeout}s")
-
-
-def get_query_results(athena_client, query_id: str) -> list[dict]:
-    """Fetch all results from a completed Athena query."""
-    results = []
-    paginator = athena_client.get_paginator("get_query_results")
-    headers = None
-
-    for page in paginator.paginate(QueryExecutionId=query_id):
-        rows = page["ResultSet"]["Rows"]
-        if headers is None:
-            # First page - extract headers
-            headers = [col.get("VarCharValue", "") for col in rows[0]["Data"]]
-            rows = rows[1:]  # Skip header row
-
-        for row in rows:
-            values = [col.get("VarCharValue", "") for col in row["Data"]]
-            results.append(dict(zip(headers, values)))
-
-    return results
-
-
-def build_athena_query(
-    mime_type: str | None,
-    extension: str | None,
-    crawl: str,
-    max_size: int,
-    limit: int | None,
-) -> str:
-    """Build Athena SQL query for Common Crawl index."""
-    conditions = [
-        f"crawl = '{crawl}'",
-        "subset = 'warc'",
-        f"warc_record_length < {max_size}",
-    ]
-
-    if mime_type:
-        conditions.append(f"content_mime_detected = '{mime_type}'")
-
-    if extension:
-        ext = extension.lstrip(".")
-        conditions.append(
-            f"(url LIKE '%.{ext}' OR url LIKE '%.{ext}?%' OR url LIKE '%.{ext}#%')"
-        )
-
-    query = f"""
-SELECT
-    url,
-    warc_filename,
-    warc_record_offset,
-    warc_record_length
-FROM ccindex.ccindex
-WHERE {' AND '.join(conditions)}
-"""
-    if limit:
-        query += f"LIMIT {limit}"
-    return query
-
-
-def query_athena(args) -> list[dict]:
-    """Query Common Crawl index via AWS Athena."""
-    print(f"Querying Athena for files in {args.crawl}...")
-    session = boto3.Session()
-    athena = session.client("athena")
-
-    query = build_athena_query(
-        args.mime, args.search_extension, args.crawl, args.max_file_size, args.limit
-    )
-    print(f"Query:\n{query}\n")
-
-    query_id = run_athena_query(
-        athena, query, args.athena_database, args.athena_output
-    )
-    print(f"Query ID: {query_id}")
-    print("Waiting for query to complete...", end="", flush=True)
-
-    wait_for_query(athena, query_id)
-    print(" done.")
-
-    print("Fetching results...")
-    return get_query_results(athena, query_id)
 
 
 # --- Local DuckDB Backend ---
@@ -446,10 +327,6 @@ Examples:
   # Query local parquet index for QOI files by extension
   %(prog)s --local-index ./cc-index/CC-MAIN-2024-51/ --search-extension qoi
 
-  # Query Athena for PNG files by MIME type
-  %(prog)s --mime image/png --output-extension png \\
-      --athena-output s3://my-bucket/athena/ --output-dir corpus/
-
   # Use existing CSV index
   %(prog)s --csv index.csv --output-extension pdf --output-dir corpus/
 
@@ -469,11 +346,6 @@ Examples:
         "--local-index",
         metavar="DIR",
         help="Directory containing parquet files from Common Crawl index",
-    )
-    source.add_argument(
-        "--athena",
-        action="store_true",
-        help="Query AWS Athena (requires --athena-output)",
     )
     source.add_argument(
         "--duckdb",
@@ -503,24 +375,6 @@ Examples:
         type=int,
         default=1048576,
         help="Maximum file size in bytes (default: 1MB)",
-    )
-
-    # Athena options
-    athena_group = parser.add_argument_group("Athena options")
-    athena_group.add_argument(
-        "--crawl",
-        default="CC-MAIN-2024-51",
-        help="Common Crawl crawl ID (default: CC-MAIN-2024-51)",
-    )
-    athena_group.add_argument(
-        "--athena-database",
-        default="ccindex",
-        help="Athena database name (default: ccindex)",
-    )
-    athena_group.add_argument(
-        "--athena-output",
-        metavar="S3_URI",
-        help="S3 location for Athena query results (required with --athena)",
     )
 
     # Output options
@@ -558,10 +412,6 @@ Examples:
 
     args = parser.parse_args()
 
-    # Validate arguments
-    if args.athena and not args.athena_output:
-        parser.error("--athena-output is required when using --athena")
-
     # Default output_extension to search_extension
     if args.output_extension is None:
         if args.search_extension:
@@ -578,10 +428,8 @@ Examples:
         index_data = load_csv_index(args.csv)
     elif args.duckdb:
         index_data = query_duckdb_index(args)
-    elif args.local_index:
+    else:  # args.local_index
         index_data = query_local_index(args)
-    else:  # args.athena
-        index_data = query_athena(args)
 
     # Estimate download
     count, total_size = estimate_download(index_data)

@@ -35,7 +35,6 @@ Both scripts use `uv run --script` with inline dependencies (PEP 723):
 | `--duckdb FILE` | Preprocessed DuckDB index (fastest, recommended) |
 | `--local-index DIR` | Raw parquet files (~250GB per crawl, slow) |
 | `--csv FILE` | CSV file with Common Crawl index data |
-| `--athena` | Query AWS Athena (requires `--athena-output`) |
 
 ### Query Filters
 
@@ -45,14 +44,6 @@ Both scripts use `uv run --script` with inline dependencies (PEP 723):
 | `--search-extension EXT` | Filter by URL extension (e.g., `qoi`) |
 | `--limit N` | Max files to query |
 | `--max-file-size` | Max file size filter (default: 1MB) |
-
-### Athena Options
-
-| Argument | Default | Description |
-|----------|---------|-------------|
-| `--crawl` | `CC-MAIN-2024-51` | Common Crawl crawl ID |
-| `--athena-database` | `ccindex` | Athena database name |
-| `--athena-output` | (required with --athena) | S3 location for query results |
 
 ### Output Options
 
@@ -75,7 +66,7 @@ Two Python scripts using `uv run --script` with inline dependencies:
 - Outputs compact DuckDB file (~2-4GB)
 
 **cc_download.py:**
-- **Four index backends**: Preprocessed DuckDB (fastest), raw parquet, Athena, CSV
+- **Three index backends**: Preprocessed DuckDB (fastest), raw parquet, CSV
 - **Multi-threaded downloads**: Parallel fetches with exponential backoff
 - **WARC extraction**: Extracts files from Common Crawl gzip-compressed archives
 - **Estimation**: Shows file count and total size before downloading
@@ -116,11 +107,3 @@ The preprocessed DuckDB file contains:
 - `url`, `extension`, `content_mime_detected`, `warc_filename`, `warc_record_offset`, `warc_record_length`
 - Indexes on `extension` and `content_mime_detected` for fast queries
 
-## AWS Setup (for Athena)
-
-Requires:
-- AWS credentials (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`)
-- S3 bucket for Athena query results
-- Athena database with Common Crawl index table
-
-See README.md for Athena table setup SQL.
