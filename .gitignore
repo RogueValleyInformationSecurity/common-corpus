@@ -1,5 +1,6 @@
 # Common Crawl index (large, download separately)
 cc-index/
+*.duckdb
 
 # Local test directories
 irfanview/

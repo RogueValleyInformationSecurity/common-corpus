@@ -1,27 +1,39 @@
 # cc_download
 
-Download files from Common Crawl for fuzzing corpus generation. Supports three index sources: local parquet files (fastest), AWS Athena, or pre-generated CSV.
+Download files from Common Crawl for fuzzing corpus generation.
 
 ## Quick Start
 
-The script uses `uv run --script` with inline dependencies—no install step needed.
+Both scripts use `uv run --script` with inline dependencies—no install step needed.
 
-### Option 1: Local Index (Recommended)
+### Option 1: Preprocessed DuckDB Index (Recommended)
 
-Download a crawl's index once (~250GB), then query instantly:
+Download the raw index once, preprocess it into a compact DuckDB file, then query instantly:
 
 ```bash
-# Download index (one-time, ~250GB)
+# 1. Download raw parquet index (one-time, ~250GB)
 aws s3 sync --no-sign-request \
     s3://commoncrawl/cc-index/table/cc-main/warc/crawl=CC-MAIN-2024-51/subset=warc/ \
     ./cc-index/CC-MAIN-2024-51/
 
-# Query by extension (fast!)
+# 2. Preprocess into DuckDB (one-time, ~10 min, outputs ~4GB file)
+./cc_preprocess.py ./cc-index/CC-MAIN-2024-51/ -o cc-2024-51.duckdb
+
+# 3. Query (sub-second!)
+./cc_download.py --duckdb cc-2024-51.duckdb \
+    --extension pdf --file-format pdf --output-dir corpus/
+```
+
+### Option 2: Raw Parquet Index
+
+Query the raw parquet files directly (slower, but no preprocessing):
+
+```bash
 ./cc_download.py --local-index ./cc-index/CC-MAIN-2024-51/ \
     --extension qoi --file-format qoi --output-dir corpus/
 ```
 
-### Option 2: AWS Athena
+### Option 3: AWS Athena
 
 No local storage needed, pay per query (~$0.25-1.00):
 
@@ -33,7 +45,7 @@ export AWS_SECRET_ACCESS_KEY=...
     --athena-output s3://my-bucket/athena/ --output-dir corpus/
 ```
 
-### Option 3: Pre-generated CSV
+### Option 4: Pre-generated CSV
 
 ```bash
 ./cc_download.py --csv index.csv --file-format pdf --output-dir corpus/
@@ -42,7 +54,7 @@ export AWS_SECRET_ACCESS_KEY=...
 ## Usage
 
 ```
-cc_download.py (--local-index DIR | --athena | --csv FILE)
+cc_download.py (--duckdb FILE | --local-index DIR | --athena | --csv FILE)
                (--mime TYPE | --extension EXT) --file-format EXT [options]
 ```
 
@@ -50,7 +62,8 @@ cc_download.py (--local-index DIR | --athena | --csv FILE)
 
 | Argument | Description |
 |----------|-------------|
-| `--local-index DIR` | Directory with parquet files (~250GB per crawl) |
+| `--duckdb FILE` | Preprocessed DuckDB index (fastest, recommended) |
+| `--local-index DIR` | Raw parquet files (~250GB per crawl) |
 | `--athena` | Query AWS Athena (requires `--athena-output`) |
 | `--csv FILE` | Pre-generated CSV file |
 
@@ -77,21 +90,25 @@ cc_download.py (--local-index DIR | --athena | --csv FILE)
 
 | Backend | Setup | Query Speed | Cost |
 |---------|-------|-------------|------|
-| Local (DuckDB) | ~250GB download | 1-10 seconds | Free |
+| DuckDB (preprocessed) | ~250GB download + 10min preprocess | <1 second | Free |
+| Local parquet | ~250GB download | 1-5 minutes | Free |
 | AWS Athena | S3 bucket | 10-60 seconds | ~$0.25-1/query |
 | CSV | Generate manually | Instant | Free |
 
 ## Workflow Example
 
 ```bash
-# 1. Download files from Common Crawl
-./cc_download.py --local-index ./cc-index/CC-MAIN-2024-51/ \
-    --extension qoi --file-format qoi --output-dir raw_corpus/
+# 1. Download and preprocess index (one-time)
+./cc_preprocess.py ./cc-index/CC-MAIN-2024-51/ -o cc-2024-51.duckdb
 
-# 2. Minimize corpus with AFL
+# 2. Download files from Common Crawl
+./cc_download.py --duckdb cc-2024-51.duckdb \
+    --mime application/pdf --file-format pdf --output-dir raw_corpus/
+
+# 3. Minimize corpus with AFL
 afl-cmin -Q -i raw_corpus/ -o minimized/ -- ./my_harness @@
 
-# 3. Fuzz!
+# 4. Fuzz!
 afl-fuzz -Q -i minimized/ -o findings/ -- ./my_harness @@
 ```
 
@@ -149,5 +166,5 @@ This helps when you know the extension but not the MIME type. The script warns i
 - MIME queries (`--mime`) are more reliable than extension for getting actual file content
 - Extension queries (`--extension`) match URL patterns but may return HTML error pages
 - Use `cc_mime.py` to find the right MIME type for an extension
-- Local index queries use DuckDB for fast columnar scans
+- Preprocessed DuckDB index excludes HTML content by default (~4GB vs ~250GB raw)
 - Supports graceful shutdown via Ctrl+C

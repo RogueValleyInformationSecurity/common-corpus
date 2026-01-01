@@ -262,6 +262,67 @@ def query_local_index(args) -> list[dict]:
     return [dict(zip(columns, row)) for row in result]
 
 
+# --- Preprocessed DuckDB Backend ---
+
+
+def build_duckdb_query(
+    mime_type: str | None,
+    extension: str | None,
+    max_size: int,
+    limit: int | None,
+) -> str:
+    """Build SQL query for preprocessed DuckDB index."""
+    conditions = [f"warc_record_length < {max_size}"]
+
+    if mime_type:
+        conditions.append(f"content_mime_detected = '{mime_type}'")
+
+    if extension:
+        ext = extension.lstrip(".")
+        conditions.append(f"extension = '{ext}'")
+
+    query = f"""
+SELECT
+    url,
+    warc_filename,
+    warc_record_offset,
+    warc_record_length
+FROM cc_index
+WHERE {' AND '.join(conditions)}
+"""
+    if limit:
+        query += f"LIMIT {limit}"
+    return query
+
+
+def query_duckdb_index(args) -> list[dict]:
+    """Query preprocessed DuckDB index file."""
+    db_path = Path(args.duckdb)
+
+    if not db_path.exists():
+        print(f"error: DuckDB file not found: {db_path}")
+        sys.exit(1)
+
+    print(f"Querying {db_path}...")
+
+    con = duckdb.connect(str(db_path), read_only=True)
+
+    query = build_duckdb_query(
+        args.mime, args.extension, args.max_file_size, args.limit
+    )
+
+    start = time.time()
+    result = con.execute(query).fetchall()
+    elapsed = time.time() - start
+
+    print(f"Query completed in {elapsed:.2f}s")
+
+    con.close()
+
+    columns = ["url", "warc_filename", "warc_record_offset", "warc_record_length"]
+    return [dict(zip(columns, row)) for row in result]
+
+
 # --- CSV Backend ---
 
 
@@ -379,6 +440,10 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  # Query preprocessed DuckDB index (fastest)
+  %(prog)s --duckdb cc-2024-51.duckdb --extension qoi \\
+      --file-format qoi --output-dir corpus/
+
   # Query local parquet index for QOI files by extension
   %(prog)s --local-index ./cc-index/CC-MAIN-2024-51/ --extension qoi \\
       --file-format qoi --output-dir corpus/
@@ -391,7 +456,7 @@ Examples:
   %(prog)s --csv index.csv --file-format pdf --output-dir corpus/
 
   # Estimate only (don't download)
-  %(prog)s --local-index ./cc-index/CC-MAIN-2024-51/ --extension qoi \\
+  %(prog)s --duckdb cc-2024-51.duckdb --extension qoi \\
       --file-format qoi --estimate-only
 """,
     )
@@ -412,6 +477,11 @@ Examples:
         "--athena",
         action="store_true",
         help="Query AWS Athena (requires --athena-output)",
+    )
+    source.add_argument(
+        "--duckdb",
+        metavar="FILE",
+        help="Preprocessed DuckDB index file (from cc_preprocess.py)",
     )
 
     # Query filters
@@ -495,13 +565,15 @@ Examples:
     if args.athena and not args.athena_output:
         parser.error("--athena-output is required when using --athena")
 
-    if not args.csv and not args.mime and not args.extension:
+    if not args.csv and not args.duckdb and not args.mime and not args.extension:
         parser.error("at least one of --mime or --extension is required")
 
     # Load or query index
     if args.csv:
         print(f"Loading index from {args.csv}...")
         index_data = load_csv_index(args.csv)
+    elif args.duckdb:
+        index_data = query_duckdb_index(args)
     elif args.local_index:
         index_data = query_local_index(args)
     else:  # args.athena
