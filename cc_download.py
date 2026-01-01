@@ -160,7 +160,7 @@ def query_athena(args) -> list[dict]:
     athena = session.client("athena")
 
     query = build_athena_query(
-        args.mime, args.extension, args.crawl, args.max_file_size, args.limit
+        args.mime, args.search_extension, args.crawl, args.max_file_size, args.limit
     )
     print(f"Query:\n{query}\n")
 
@@ -239,7 +239,7 @@ def query_local_index(args) -> list[dict]:
 
     # Build query
     query_template = build_local_query(
-        args.mime, args.extension, args.max_file_size, args.limit
+        args.mime, args.search_extension, args.max_file_size, args.limit
     )
 
     # Create DuckDB connection and query
@@ -308,7 +308,7 @@ def query_duckdb_index(args) -> list[dict]:
     con = duckdb.connect(str(db_path), read_only=True)
 
     query = build_duckdb_query(
-        args.mime, args.extension, args.max_file_size, args.limit
+        args.mime, args.search_extension, args.max_file_size, args.limit
     )
 
     start = time.time()
@@ -420,7 +420,7 @@ def download_worker(
             file_id = downloaded_count + 1
             downloaded_count += 1
 
-        output_path = output_dir / f"file{file_id:06d}.{args.file_format}"
+        output_path = output_dir / f"file{file_id:06d}.{args.output_extension}"
         output_path.write_bytes(file_data)
 
         print(".", end="", flush=True)
@@ -441,23 +441,20 @@ def main() -> None:
         epilog="""
 Examples:
   # Query preprocessed DuckDB index (fastest)
-  %(prog)s --duckdb cc-2024-51.duckdb --extension qoi \\
-      --file-format qoi --output-dir corpus/
+  %(prog)s --duckdb cc-2024-51.duckdb --search-extension qoi --output-dir corpus/
 
   # Query local parquet index for QOI files by extension
-  %(prog)s --local-index ./cc-index/CC-MAIN-2024-51/ --extension qoi \\
-      --file-format qoi --output-dir corpus/
+  %(prog)s --local-index ./cc-index/CC-MAIN-2024-51/ --search-extension qoi
 
   # Query Athena for PNG files by MIME type
-  %(prog)s --mime image/png --file-format png \\
+  %(prog)s --mime image/png --output-extension png \\
       --athena-output s3://my-bucket/athena/ --output-dir corpus/
 
   # Use existing CSV index
-  %(prog)s --csv index.csv --file-format pdf --output-dir corpus/
+  %(prog)s --csv index.csv --output-extension pdf --output-dir corpus/
 
   # Estimate only (don't download)
-  %(prog)s --duckdb cc-2024-51.duckdb --extension qoi \\
-      --file-format qoi --estimate-only
+  %(prog)s --duckdb cc-2024-51.duckdb --search-extension qoi --estimate-only
 """,
     )
 
@@ -492,7 +489,7 @@ Examples:
         help="Filter by MIME type (e.g., image/png, application/pdf)",
     )
     filter_group.add_argument(
-        "--extension",
+        "--search-extension",
         metavar="EXT",
         help="Filter by file extension (e.g., qoi, png, pdf)",
     )
@@ -529,9 +526,9 @@ Examples:
     # Output options
     output_group = parser.add_argument_group("Output options")
     output_group.add_argument(
-        "--file-format",
-        required=True,
-        help="File extension for downloaded files (e.g., pdf, png, qoi)",
+        "--output-extension",
+        metavar="EXT",
+        help="File extension for downloaded files (defaults to --search-extension)",
     )
     output_group.add_argument(
         "--output-dir",
@@ -565,8 +562,15 @@ Examples:
     if args.athena and not args.athena_output:
         parser.error("--athena-output is required when using --athena")
 
-    if not args.csv and not args.duckdb and not args.mime and not args.extension:
-        parser.error("at least one of --mime or --extension is required")
+    # Default output_extension to search_extension
+    if args.output_extension is None:
+        if args.search_extension:
+            args.output_extension = args.search_extension
+        else:
+            parser.error("--output-extension is required when not using --search-extension")
+
+    if not args.csv and not args.duckdb and not args.mime and not args.search_extension:
+        parser.error("at least one of --mime or --search-extension is required")
 
     # Load or query index
     if args.csv:

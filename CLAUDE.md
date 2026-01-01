@@ -20,12 +20,10 @@ Both scripts use `uv run --script` with inline dependencies (PEP 723):
 ./cc_preprocess.py ./cc-index/CC-MAIN-2024-51/ -o cc-2024-51.duckdb
 
 # 2. Query and download (sub-second queries)
-./cc_download.py --duckdb cc-2024-51.duckdb --extension qoi \
-    --file-format qoi --output-dir corpus/
+./cc_download.py --duckdb cc-2024-51.duckdb --search-extension qoi --output-dir corpus/
 
 # Estimate only (no download)
-./cc_download.py --duckdb cc-2024-51.duckdb --extension qoi \
-    --file-format qoi --estimate-only
+./cc_download.py --duckdb cc-2024-51.duckdb --search-extension qoi --estimate-only
 ```
 
 ## CLI Arguments
@@ -44,7 +42,7 @@ Both scripts use `uv run --script` with inline dependencies (PEP 723):
 | Argument | Description |
 |----------|-------------|
 | `--mime TYPE` | Filter by MIME type (e.g., `image/png`) |
-| `--extension EXT` | Filter by URL extension (e.g., `qoi`) - more reliable for obscure formats |
+| `--search-extension EXT` | Filter by URL extension (e.g., `qoi`) |
 | `--limit N` | Max files to query |
 | `--max-file-size` | Max file size filter (default: 1MB) |
 
@@ -60,7 +58,7 @@ Both scripts use `uv run --script` with inline dependencies (PEP 723):
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `--file-format` | (required) | File extension for downloads |
+| `--output-extension` | `--search-extension` | File extension for downloads |
 | `--output-dir` | `corpus` | Output directory |
 | `--threads` | 16 | Download thread count |
 | `--estimate-only` | False | Show estimate, don't download |
@@ -95,7 +93,7 @@ aws s3 sync --no-sign-request \
 
 # 3. Download corpus (sub-second queries, repeat for different formats)
 ./cc_download.py --duckdb cc-2024-51.duckdb \
-    --extension qoi --file-format qoi --output-dir raw/
+    --search-extension qoi --output-dir raw/
 
 # 4. Minimize with AFL
 afl-cmin -Q -i raw/ -o minimized/ -- ./harness @@

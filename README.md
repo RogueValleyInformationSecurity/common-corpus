@@ -21,7 +21,7 @@ aws s3 sync --no-sign-request \
 
 # 3. Query (sub-second!)
 ./cc_download.py --duckdb cc-2024-51.duckdb \
-    --extension pdf --file-format pdf --output-dir corpus/
+    --search-extension pdf --output-dir corpus/
 ```
 
 ### Option 2: Raw Parquet Index
@@ -30,7 +30,7 @@ Query the raw parquet files directly (slower, but no preprocessing):
 
 ```bash
 ./cc_download.py --local-index ./cc-index/CC-MAIN-2024-51/ \
-    --extension qoi --file-format qoi --output-dir corpus/
+    --search-extension qoi --output-dir corpus/
 ```
 
 ### Option 3: AWS Athena
@@ -41,21 +41,21 @@ No local storage needed, pay per query (~$0.25-1.00):
 export AWS_ACCESS_KEY_ID=...
 export AWS_SECRET_ACCESS_KEY=...
 
-./cc_download.py --athena --mime image/png --file-format png \
+./cc_download.py --athena --mime image/png --output-extension png \
     --athena-output s3://my-bucket/athena/ --output-dir corpus/
 ```
 
 ### Option 4: Pre-generated CSV
 
 ```bash
-./cc_download.py --csv index.csv --file-format pdf --output-dir corpus/
+./cc_download.py --csv index.csv --output-extension pdf --output-dir corpus/
 ```
 
 ## Usage
 
 ```
 cc_download.py (--duckdb FILE | --local-index DIR | --athena | --csv FILE)
-               (--mime TYPE | --extension EXT) --file-format EXT [options]
+               (--mime TYPE | --search-extension EXT) [options]
 ```
 
 ### Index Source (one required)
@@ -72,7 +72,7 @@ cc_download.py (--duckdb FILE | --local-index DIR | --athena | --csv FILE)
 | Argument | Description |
 |----------|-------------|
 | `--mime TYPE` | Filter by MIME type (e.g., `image/png`) |
-| `--extension EXT` | Filter by URL extension (e.g., `qoi`, `png`) |
+| `--search-extension EXT` | Filter by URL extension (e.g., `qoi`, `png`) |
 | `--limit N` | Maximum files to return |
 | `--max-file-size N` | Maximum file size in bytes (default: 1MB) |
 
@@ -80,7 +80,7 @@ cc_download.py (--duckdb FILE | --local-index DIR | --athena | --csv FILE)
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `--file-format` | (required) | Extension for downloaded files |
+| `--output-extension` | `--search-extension` | Extension for downloaded files |
 | `--output-dir` | `corpus` | Output directory |
 | `--threads` | 16 | Download thread count |
 | `--estimate-only` | | Show count/size, don't download |
@@ -103,7 +103,7 @@ cc_download.py (--duckdb FILE | --local-index DIR | --athena | --csv FILE)
 
 # 2. Download files from Common Crawl
 ./cc_download.py --duckdb cc-2024-51.duckdb \
-    --mime application/pdf --file-format pdf --output-dir raw_corpus/
+    --mime application/pdf --output-extension pdf --output-dir raw_corpus/
 
 # 3. Minimize corpus with AFL
 afl-cmin -Q -i raw_corpus/ -o minimized/ -- ./my_harness @@
