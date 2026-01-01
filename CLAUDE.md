@@ -6,6 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Tools for downloading files from Common Crawl's web archive for fuzzing corpus generation:
 
+- **download_crawl.sh** - Download and preprocess a crawl index in one step (~250GB → ~4GB DuckDB)
 - **cc_preprocess.py** - Build a compact DuckDB index from raw parquet files (one-time, ~2-4GB output)
 - **cc_download.py** - Download files matching MIME type or extension from the index
 
@@ -74,24 +75,21 @@ Two Python scripts using `uv run --script` with inline dependencies:
 ## Typical Workflow
 
 ```bash
-# 1. Download raw parquet index (one-time, ~250GB)
-aws s3 sync --no-sign-request \
-    s3://commoncrawl/cc-index/table/cc-main/warc/crawl=CC-MAIN-2024-51/subset=warc/ \
-    ./cc-index/CC-MAIN-2024-51/
+# 1. Download and preprocess index (one-time per crawl)
+./download_crawl.sh CC-MAIN-2024-51
 
-# 2. Preprocess into DuckDB (one-time, ~30 min)
-./cc_preprocess.py ./cc-index/CC-MAIN-2024-51/ -o cc-2024-51.duckdb
-
-# 3. Download corpus (sub-second queries, repeat for different formats)
-./cc_download.py --duckdb cc-2024-51.duckdb \
+# 2. Download corpus (sub-second queries, repeat for different formats)
+./cc_download.py --duckdb CC-MAIN-2024-51.duckdb \
     --search-extension qoi --output-dir raw/
 
-# 4. Minimize with AFL
+# 3. Minimize with AFL
 afl-cmin -Q -i raw/ -o minimized/ -- ./harness @@
 
-# 5. Fuzz
+# 4. Fuzz
 afl-fuzz -Q -i minimized/ -o findings/ -- ./harness @@
 ```
+
+Note: S3 bucket listing is restricted, so `download_crawl.sh` uses HTTPS to fetch the index files.
 
 ## Preprocessing Options
 

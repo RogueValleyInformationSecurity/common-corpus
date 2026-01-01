@@ -11,16 +11,11 @@ Both scripts use `uv run --script` with inline dependencies—no install step ne
 Download the raw index once, preprocess it into a compact DuckDB file, then query instantly:
 
 ```bash
-# 1. Download raw parquet index (one-time, ~250GB)
-aws s3 sync --no-sign-request \
-    s3://commoncrawl/cc-index/table/cc-main/warc/crawl=CC-MAIN-2024-51/subset=warc/ \
-    ./cc-index/CC-MAIN-2024-51/
+# 1. Download and preprocess (one-time per crawl, ~250GB download → ~4GB DuckDB)
+./download_crawl.sh CC-MAIN-2024-51
 
-# 2. Preprocess into DuckDB (one-time, ~10 min, outputs ~4GB file)
-./cc_preprocess.py ./cc-index/CC-MAIN-2024-51/ -o cc-2024-51.duckdb
-
-# 3. Query (sub-second!)
-./cc_download.py --duckdb cc-2024-51.duckdb \
+# 2. Query (sub-second!)
+./cc_download.py --duckdb CC-MAIN-2024-51.duckdb \
     --search-extension pdf --output-dir corpus/
 ```
 
@@ -85,10 +80,10 @@ cc_download.py (--duckdb FILE | --local-index DIR | --csv FILE)
 
 ```bash
 # 1. Download and preprocess index (one-time)
-./cc_preprocess.py ./cc-index/CC-MAIN-2024-51/ -o cc-2024-51.duckdb
+./download_crawl.sh CC-MAIN-2024-51
 
 # 2. Download files from Common Crawl
-./cc_download.py --duckdb cc-2024-51.duckdb \
+./cc_download.py --duckdb CC-MAIN-2024-51.duckdb \
     --mime application/pdf --output-extension pdf --output-dir raw_corpus/
 
 # 3. Minimize corpus with AFL
@@ -100,25 +95,42 @@ afl-fuzz -Q -i minimized/ -o findings/ -- ./my_harness @@
 
 ## Downloading the Index
 
-Each crawl has a manifest file listing all parquet files. Download ~300 files (~400GB):
+### Using the Helper Script (Recommended)
+
+The `download_crawl.sh` script downloads and preprocesses a crawl index in one step:
 
 ```bash
-# Create directory
+# Download and preprocess a single crawl (~250GB download, outputs ~4GB DuckDB)
+./download_crawl.sh CC-MAIN-2024-51
+
+# Run multiple crawls in parallel (if you have bandwidth)
+./download_crawl.sh CC-MAIN-2024-46 &
+./download_crawl.sh CC-MAIN-2024-42 &
+```
+
+The script:
+- Downloads ~300 parquet files (~250GB) via HTTPS
+- Preprocesses into a compact DuckDB file (~4GB)
+- Skips if the DuckDB file already exists
+- Cleans up automatically on error
+
+### Manual Download
+
+Each crawl has a manifest file listing all parquet files. S3 bucket listing is restricted, so use HTTPS:
+
+```bash
+# Create directory and download (~300 files, ~250GB)
 mkdir -p ./cc-index/CC-MAIN-2024-51
 cd ./cc-index/CC-MAIN-2024-51
 
-# Download using manifest (parallel with 4 connections)
 curl -s 'https://data.commoncrawl.org/crawl-data/CC-MAIN-2024-51/cc-index-table.paths.gz' | \
     gunzip | grep 'subset=warc' | \
     xargs -I{} -P4 curl -sO 'https://data.commoncrawl.org/{}'
 ```
 
-Alternative with wget:
+Then preprocess:
 ```bash
-curl -s 'https://data.commoncrawl.org/crawl-data/CC-MAIN-2024-51/cc-index-table.paths.gz' | \
-    gunzip | grep 'subset=warc' | \
-    sed 's|^|https://data.commoncrawl.org/|' > urls.txt
-wget -P ./cc-index/CC-MAIN-2024-51 -i urls.txt
+./cc_preprocess.py ./cc-index/CC-MAIN-2024-51/ -o CC-MAIN-2024-51.duckdb
 ```
 
 ## Finding MIME Types
