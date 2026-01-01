@@ -1,0 +1,12 @@
+# Common Crawl index (large, download separately)
+cc-index/
+
+# Local test directories
+irfanview/
+pyghidra_mcp_projects/
+corpus/
+
+# Python
+__pycache__/
+*.pyc
+.venv/

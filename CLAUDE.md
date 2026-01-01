@@ -4,79 +4,104 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Common Corpus is a tool for building coverage-minimized corpus data sets for fuzzing. It downloads files from Common Crawl (via S3), runs them through a SanitizerCoverage-enabled binary, and keeps only files that produce new code coverage. The goal is to produce the smallest set of files that cover the largest amount of branch coverage.
+cc_download is a tool for downloading files from Common Crawl's web archive for fuzzing corpus generation. It can query AWS Athena directly or use a pre-generated CSV index, then downloads matching files from Common Crawl's S3-hosted WARC archives.
+
+The tool focuses solely on downloading—corpus minimization is left to specialized tools like `afl-cmin`.
 
 ## Running the Tool
 
-```bash
-# Install dependencies
-pip3 install warcio boto3
-
-# Run with an index CSV file
-python3 common_corpus.py <index_csv>
-
-# Resume from saved state
-python3 common_corpus.py <index_csv> state.dat
-```
-
-## Configuration
-
-Before running, configure these variables at the top of `common_corpus.py`:
-
-- `ACCESS_KEY` / `SECRET_KEY`: AWS credentials for S3 access to Common Crawl
-- `TARGET_CMDLINE`: Command line for the sancov-enabled binary (use `%s` as placeholder for test file)
-- `TARGET_BINARY`: Name of the sancov-enabled binary (for locating .sancov files)
-- `FILE_FORMAT`: File extension for corpus files
-- `CLEANUP_GLOB`: Glob pattern for files to clean up after each run (empty string to skip)
-- `NTHREADS`: Number of worker threads (default: 16)
-
-## Prerequisites
-
-### 1. Generate Index CSV via AWS Athena
-
-Create a database and table in AWS Athena pointing to Common Crawl's index:
-```sql
-CREATE DATABASE ccindex;
-
-CREATE EXTERNAL TABLE ccindex (
-  -- includes content_mime_detected, warc_filename, warc_record_offset, warc_record_length
-) STORED AS parquet LOCATION 's3://commoncrawl/cc-index/table/cc-main/warc/';
-```
-
-Query for your target file type:
-```sql
-SELECT url, warc_filename, warc_record_offset, warc_record_length
-FROM ccindex
-WHERE crawl = 'CC-MAIN-2023-14'
-  AND subset = 'warc'
-  AND content_mime_detected = 'application/pdf'
-  AND warc_record_length < 1048576;  -- 1MB limit (Common Crawl truncates larger files)
-```
-
-### 2. Compile Target with SanitizerCoverage
+The script uses `uv run --script` with inline dependencies (PEP 723):
 
 ```bash
-clang -fsanitize=address -fsanitize-coverage=trace-pc-guard -o target target.c
+# Query Athena directly
+./cc_download.py --mime image/qoi --file-format qoi \
+    --athena-output s3://my-bucket/athena/ \
+    --output-dir corpus/
+
+# Use existing CSV
+./cc_download.py --csv index.csv --file-format pdf --output-dir corpus/
+
+# Estimate only (no download)
+./cc_download.py --mime image/png --file-format png \
+    --athena-output s3://my-bucket/athena/ \
+    --estimate-only
 ```
+
+## CLI Arguments
+
+### Input Source (one required)
+
+| Argument | Description |
+|----------|-------------|
+| `--csv FILE` | CSV file with Common Crawl index data |
+| `--local-index DIR` | Local parquet files (fastest, ~250GB per crawl) |
+| `--athena` | Query AWS Athena (requires `--athena-output`) |
+
+### Query Filters
+
+| Argument | Description |
+|----------|-------------|
+| `--mime TYPE` | Filter by MIME type (e.g., `image/png`) |
+| `--extension EXT` | Filter by URL extension (e.g., `qoi`) - more reliable for obscure formats |
+| `--limit N` | Max files to query |
+| `--max-file-size` | Max file size filter (default: 1MB) |
+
+### Athena Options
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--crawl` | `CC-MAIN-2024-51` | Common Crawl crawl ID |
+| `--athena-database` | `ccindex` | Athena database name |
+| `--athena-output` | (required with --athena) | S3 location for query results |
+
+### Output Options
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--file-format` | (required) | File extension for downloads |
+| `--output-dir` | `corpus` | Output directory |
+| `--threads` | 16 | Download thread count |
+| `--estimate-only` | False | Show estimate, don't download |
+| `--yes` | False | Skip confirmation prompt |
 
 ## Architecture
 
-Single-file Python script with multi-threaded design:
+Single-file Python script (~350 lines) with:
 
-- **Main thread**: Loads index CSV, spawns worker threads, handles graceful shutdown on Ctrl+C
-- **Worker threads**: Each thread independently fetches WARC records from S3 (using `warcio`), runs the target binary with `ASAN_OPTIONS=coverage=1`, analyzes resulting `.sancov` files
-- **Shared state**: Global `coverage` set tracks all seen edges; `id_lock` mutex protects corpus ID assignment
+- **Three index backends**: Local DuckDB (fastest), AWS Athena, CSV
+- **Multi-threaded downloads**: Parallel S3 fetches with exponential backoff
+- **WARC extraction**: Uses `warcio` to extract files from Common Crawl archives
+- **Estimation**: Shows file count and total size before downloading
 
-The tool uses SanitizerCoverage's trace-pc-guard mode. Each test file produces a `.sancov` file containing 8-byte edge addresses. Files triggering new edges are saved to `out/`.
+## Typical Workflow
 
-## Output
+```bash
+# 1. Download raw corpus
+./cc_download.py --local-index ./cc-index/CC-MAIN-2024-51/ \
+    --extension qoi --file-format qoi --output-dir raw/
 
-- Corpus files: `out/corpus<N>.<format>`
-- Coverage data: `out/corpus<N>.<format>.sancov`
-- State file: `state.dat` (JSON with index offset, corpus ID, tested count, coverage set)
+# 2. Minimize with AFL
+afl-cmin -Q -i raw/ -o minimized/ -- ./harness @@
 
-Progress indicators: `+` = new coverage added, `.` = no new coverage, `|N-S|` = S3 retry (thread N, sleep S seconds)
+# 3. Fuzz
+afl-fuzz -Q -i minimized/ -o findings/ -- ./harness @@
+```
 
-## References
+## Local Index Setup
 
-See the [Isosceles blog post](https://blog.isosceles.com/how-to-build-a-corpus-for-fuzzing/) for full setup instructions including AWS IAM configuration and Athena query editor setup.
+Download a crawl's index once (~250GB), then query instantly with DuckDB:
+
+```bash
+aws s3 sync --no-sign-request \
+    s3://commoncrawl/cc-index/table/cc-main/warc/crawl=CC-MAIN-2024-51/subset=warc/ \
+    ./cc-index/CC-MAIN-2024-51/
+```
+
+## AWS Setup (for Athena)
+
+Requires:
+- AWS credentials (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`)
+- S3 bucket for Athena query results
+- Athena database with Common Crawl index table
+
+See README.md for Athena table setup SQL.
